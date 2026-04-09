@@ -3463,6 +3463,7 @@ def test_vertex_ai_traffic_type_preserved_in_hidden_params_streaming():
     result = iterator.chunk_parser(chunk)
 
     assert result._hidden_params["provider_specific_fields"]["traffic_type"] == "ON_DEMAND"
+    assert result.usage.extra_properties["google"]["traffic_type"] == "ON_DEMAND"
 
 
 def test_vertex_ai_traffic_type_preserved_in_hidden_params_non_streaming():
@@ -3488,6 +3489,8 @@ def test_vertex_ai_traffic_type_preserved_in_hidden_params_non_streaming():
 
     raw_response = MagicMock()
     raw_response.json.return_value = completion_response
+    raw_response.headers = {"x-vertex-ai-llm-request-type": "dedicated"}
+    raw_response.text = json.dumps(completion_response)
 
     result = VertexGeminiConfig().transform_response(
         model="gemini-pro",
@@ -3502,6 +3505,8 @@ def test_vertex_ai_traffic_type_preserved_in_hidden_params_non_streaming():
     )
 
     assert result._hidden_params["provider_specific_fields"]["traffic_type"] == "PROVISIONED_THROUGHPUT"
+    assert result._hidden_params["additional_headers"]["llm_provider-x-vertex-ai-llm-request-type"] == "dedicated"
+    assert result.usage.extra_properties["google"]["traffic_type"] == "PROVISIONED_THROUGHPUT"
 
 
 def test_vertex_ai_traffic_type_surfaced_in_responses_api():

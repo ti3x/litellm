@@ -37,6 +37,7 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_FLASH_LITE,
     DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_PRO,
 )
+from litellm.litellm_core_utils.core_helpers import process_response_headers
 from litellm.litellm_core_utils.prompt_templates.factory import (
     _encode_tool_call_id_with_signature,
 )
@@ -225,6 +226,50 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
+
+    @staticmethod
+    def _attach_processed_response_headers(
+        model_response: Union[ModelResponse, "ModelResponseStream"],
+        response_headers: Union[httpx.Headers, dict],
+    ) -> None:
+        processed_headers = process_response_headers(response_headers)
+        hidden_params = getattr(model_response, "_hidden_params", {}) or {}
+        existing_headers = hidden_params.get("additional_headers", {}) or {}
+        hidden_params["additional_headers"] = {
+            **processed_headers,
+            **existing_headers,
+        }
+        model_response._hidden_params = hidden_params
+
+    @staticmethod
+    def _attach_traffic_type_metadata(
+        model_response: Union[ModelResponse, "ModelResponseStream"],
+        usage: Optional[Usage],
+        traffic_type: Optional[str],
+    ) -> None:
+        if not traffic_type:
+            return
+
+        hidden_params = getattr(model_response, "_hidden_params", {}) or {}
+        hidden_params.setdefault("provider_specific_fields", {})[
+            "traffic_type"
+        ] = traffic_type
+        model_response._hidden_params = hidden_params
+
+        if usage is None:
+            return
+
+        extra_properties = getattr(usage, "extra_properties", None)
+        if not isinstance(extra_properties, dict):
+            extra_properties = {}
+
+        google_obj = extra_properties.get("google")
+        if not isinstance(google_obj, dict):
+            google_obj = {}
+
+        google_obj["traffic_type"] = traffic_type
+        extra_properties["google"] = google_obj
+        setattr(usage, "extra_properties", extra_properties)
 
     @classmethod
     def get_config(cls):
@@ -2306,6 +2351,11 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 headers=raw_response.headers,
             )
 
+        VertexGeminiConfig._attach_processed_response_headers(
+            model_response=model_response,
+            response_headers=dict(raw_response.headers),
+        )
+
         return self._transform_google_generate_content_to_openai_model_response(
             completion_response=completion_response,
             model_response=model_response,
@@ -2410,10 +2460,11 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             traffic_type = completion_response.get("usageMetadata", {}).get(
                 "trafficType"
             )
-            if traffic_type:
-                model_response._hidden_params.setdefault(
-                    "provider_specific_fields", {}
-                )["traffic_type"] = traffic_type
+            VertexGeminiConfig._attach_traffic_type_metadata(
+                model_response=model_response,
+                usage=usage,
+                traffic_type=traffic_type,
+            )
 
         except Exception as e:
             raise VertexAIError(
@@ -3134,10 +3185,11 @@ class ModelResponseIterator:
                 traffic_type = processed_chunk.get("usageMetadata", {}).get(
                     "trafficType"
                 )
-                if traffic_type:
-                    model_response._hidden_params.setdefault(
-                        "provider_specific_fields", {}
-                    )["traffic_type"] = traffic_type
+                VertexGeminiConfig._attach_traffic_type_metadata(
+                    model_response=model_response,
+                    usage=usage,
+                    traffic_type=traffic_type,
+                )
 
             setattr(model_response, "usage", usage)  # type: ignore
 
